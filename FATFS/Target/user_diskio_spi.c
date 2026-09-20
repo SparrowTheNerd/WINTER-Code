@@ -26,7 +26,6 @@
 
 #include "stm32h7xx_hal.h" /* Provide the low-level HAL functions */
 #include "user_diskio_spi.h"
-#include "abstract.h"
 
 //Make sure you set #define SD_SPI_HANDLE as some hspix in main.h
 //Make sure you set #define SD_CS_GPIO_Port as some GPIO port in main.h
@@ -37,7 +36,7 @@ extern SPI_HandleTypeDef SD_SPI_HANDLE;
 
 //(Note that the _256 is used as a mask to clear the prescalar bits as it provides binary 111 in the correct position)
 #define FCLK_SLOW() { MODIFY_REG(SD_SPI_HANDLE.Instance->CR1, SPI_BAUDRATEPRESCALER_256, SPI_BAUDRATEPRESCALER_128); }	/* Set SCLK = slow, approx 280 KBits/s*/
-#define FCLK_FAST() { MODIFY_REG(SD_SPI_HANDLE.Instance->CR1, SPI_BAUDRATEPRESCALER_256, SPI_BAUDRATEPRESCALER_64); }	/* Set SCLK = fast, approx 4.5 MBits/s */
+#define FCLK_FAST() { MODIFY_REG(SD_SPI_HANDLE.Instance->CR1, SPI_BAUDRATEPRESCALER_256, SPI_BAUDRATEPRESCALER_32); }	/* Set SCLK = fast, approx 4.5 MBits/s */
 
 #define CS_HIGH()	{HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_SET);}
 #define CS_LOW()	{HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_RESET);}
@@ -95,14 +94,6 @@ void SPI_Timer_On(uint32_t waitTicks) {
 uint8_t SPI_Timer_Status() {
     return ((HAL_GetTick() - spiTimerTickStart) < spiTimerTickDelay);
 }
-
-uint8_t dma_tx_done = 0; //used to signal that the DMA transfer is complete
-size_t numBlocks = 0;
-
-uint8_t* buf;
-uint8_t* rxBuf;
-
-
 
 /*-----------------------------------------------------------------------*/
 /* SPI controls (Platform dependent)                                     */
@@ -171,50 +162,7 @@ int wait_ready (	/* 1:Ready, 0:Timeout */
 	return (d == 0xFF) ? 1 : 0;
 }
 
-static
-int wait_ready_us (	/* 1:Ready, 0:Timeout */
-	UINT wt			/* Timeout [ms] */
-)
-{
-	BYTE d;
-	//wait_ready needs its own timer, unfortunately, so it can't use the
-	//spi_timer functions
-	uint32_t waitSpiTimerTickStart;
-	uint32_t waitSpiTimerTickDelay;
 
-	waitSpiTimerTickStart = DWT->CYCCNT;
-	uint32_t ticks = (HAL_RCC_GetHCLKFreq() / 1000000); // Convert ms to clock cycles
-	waitSpiTimerTickDelay = (uint32_t)wt * ticks; // Convert us to clock cycles
-	do {
-		d = xchg_spi(0xFF);
-		/* This loop takes a time. Insert rot_rdq() here for multitask envilonment. */
-	} while (d != 0xFF && ((DWT->CYCCNT - waitSpiTimerTickStart) < waitSpiTimerTickDelay-ticks));	/* Wait for card goes ready or timeout */
-
-	return (d == 0xFF) ? 1 : 0;
-}
-
-void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
-	if(hspi->Instance == SD_SPI_HANDLE.Instance) {
-		static size_t currentBlock = 1;
-		if(currentBlock < numBlocks) {	//if there are blocks left to transfer
-			//Start the next DMA transfer
-			// delay_us(50);
-			wait_ready_us(15); //Wait for the SPI bus to be ready
-			if(currentBlock < numBlocks - 1) {
-				HAL_SPI_TransmitReceive_DMA(hspi, buf + currentBlock*(512+EXTRA_BYTES), rxBuf + currentBlock*(512+EXTRA_BYTES), (512+EXTRA_BYTES));
-			}
-			else {
-				HAL_SPI_TransmitReceive_DMA(hspi, buf + currentBlock*515, rxBuf + currentBlock*515, 515);
-			}
-			currentBlock++;
-		}
-		else {
-			// wait_ready(500);
-			dma_tx_done = 1;
-			currentBlock = 0; //Reset for next transfer
-		}
-	}
-}
 
 /*-----------------------------------------------------------------------*/
 /* Despiselect card and release SPI                                         */
@@ -301,24 +249,6 @@ int xmit_datablock (	/* 1:OK, 0:Failed */
 	}
 	return 1;
 }
-
-static
-int xmit_datablock_DMA (	/* 1:OK, 0:Failed */
-	const BYTE *buff,	/* Ponter to data to be sent */
-	BYTE *rxBuff,	/* Ponter to data to be received (can be NULL) */
-	uint16_t size,
-	BYTE token			/* Token */
-)
-{
-	// if (!wait_ready_us(5)) return 0;		/* Wait for card ready */
-	dma_tx_done = 0;		/* Reset DMA transfer done flag */
-	HAL_SPI_TransmitReceive_DMA(&SD_SPI_HANDLE, buff, rxBuff, size);		/* Data */
-	while(!dma_tx_done);	/* Wait for DMA transfer to complete */
-	xchg_spi(0xFF);				/* Receive data resp */
-	// if ((resp & 0x1F) != 0x05) return 0;	/* Function fails if the data packet was not accepted */
-	
-	return 1;
-}
 #endif
 
 
@@ -397,7 +327,7 @@ inline DSTATUS USER_SPI_initialize (
 
 	if (Stat & STA_NODISK) return Stat;	/* Is card existing in the soket? */
 
-	// FCLK_SLOW();
+	FCLK_SLOW();
 	for (n = 10; n; n--) xchg_spi(0xFF);	/* Send 80 dummy clocks */
 
 	ty = 0;
@@ -427,7 +357,7 @@ inline DSTATUS USER_SPI_initialize (
 	despiselect();
 
 	if (ty) {			/* OK */
-		// FCLK_FAST();			/* Set fast clock */
+		FCLK_FAST();			/* Set fast clock */
 		Stat &= ~STA_NOINIT;	/* Clear STA_NOINIT flag */
 	} else {			/* Failed */
 		Stat = STA_NOINIT;
@@ -528,34 +458,6 @@ inline DRESULT USER_SPI_write (
 	despiselect();
 
 	return count ? RES_ERROR : RES_OK;	/* Return result */
-}
-
-inline DRESULT USER_SPI_DMA_write (
-	const BYTE *buff,	/* Ponter to the data to write */
-	BYTE *rxBuff,	/* Ponter to the data to receive (can be NULL) */
-	uint16_t size,		/* Size of data to write (must be 512) */
-	DWORD sector,		/* Start sector number (LBA) */
-	UINT count			/* Number of sectors to write (1..128) */
-)
-{
-	if (Stat & STA_NOINIT) return RES_NOTRDY;	/* Check drive status */
-	if (Stat & STA_PROTECT) return RES_WRPRT;	/* Check write protect */
-
-	buf = (uint8_t*)buff; // Store the pointer to the data buffer for DMA transfer
-	rxBuf = rxBuff; // Store the pointer to the receive buffer for DMA transfer
-	numBlocks = count; // Store the number of blocks to transfer
-
-	if (!(CardType & CT_BLOCK)) sector *= 512;	/* LBA ==> BA conversion (byte addressing cards) */
-
-	// if (CardType & CT_SDC) send_cmd(ACMD23, count);	/* Predefine number of sectors */
-	if (send_cmd(CMD25, sector) == 0) {	/* WRITE_MULTIPLE_BLOCK */
-		if (!xmit_datablock_DMA(buff, rxBuff, 512 + EXTRA_BYTES, 0xFC)) return RES_ERROR;
-		// xchg_spi(0xFD);
-		xmit_datablock(0, 0xFD);
-	}
-	despiselect();
-
-	return RES_OK;	/* Return result */
 }
 #endif
 

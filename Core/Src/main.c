@@ -124,6 +124,20 @@ int main(void)
   MX_FATFS_Init();
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
+  // 1. Enable the SYSCFG peripheral clock
+  __HAL_RCC_SYSCFG_CLK_ENABLE();
+
+  // 2. Map EXTI Line 4 to PORT B (0x01 maps to Port B)
+  // Note: We use [1] because EXTICR[1] handles EXTI4, EXTI5, EXTI6, and EXTI7.
+  SYSCFG->EXTICR[1] = (SYSCFG->EXTICR[1] & ~(0x0FU << 0)) | (0x01U << 0);
+
+  // 3. Configure EXTI Line 4 to trigger on a RISING edge
+  EXTI->RTSR1 |= EXTI_RTSR1_TR4;   // Enable rising edge trigger
+  EXTI->FTSR1 &= ~EXTI_FTSR1_TR4;  // Disable falling edge trigger
+
+  // 4. Enable EXTI4 at the Core Level
+  HAL_NVIC_SetPriority(EXTI4_IRQn, 5, 0); 
+
   cpp_main();
 
   //should never pass this point
@@ -246,8 +260,8 @@ void MPU_Config(void)
   */
   MPU_InitStruct.Enable = MPU_REGION_ENABLE;
   MPU_InitStruct.Number = MPU_REGION_NUMBER0;
-  MPU_InitStruct.BaseAddress = 0x38000000;
-  MPU_InitStruct.Size = MPU_REGION_SIZE_16KB;
+  MPU_InitStruct.BaseAddress = 0x30000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_32KB;
   MPU_InitStruct.SubRegionDisable = 0x0;
   MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
   MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
@@ -255,6 +269,14 @@ void MPU_Config(void)
   MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
   MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
   MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Initializes and configures the Region and the memory to be protected
+  */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER1;
+  MPU_InitStruct.BaseAddress = 0x38000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_16KB;
 
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
   /* Enables the MPU */

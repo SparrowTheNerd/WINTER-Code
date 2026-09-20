@@ -142,7 +142,9 @@ Core/Src/MMC5983.cpp \
 Core/Src/MS5607.cpp \
 Core/Src/SX1262-new.cpp \
 Core/Src/abstract.cpp \
+Core/Src/callback_handler.cpp \
 Core/Src/cpp_main.cpp \
+Core/Src/sdDMA.cpp \
 KalmanFilter/kalman.cpp \
 SparkFun-UBlox-STM32/src/sfe_bus.cpp \
 SparkFun-UBlox-STM32/src/u-blox_GNSS.cpp

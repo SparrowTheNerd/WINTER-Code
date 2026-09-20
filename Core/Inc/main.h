@@ -136,7 +136,7 @@ void Error_Handler(void);
 #define LoRa_SPI_HANDLE hspi2
 #define SD_SPI_DMA_TX hdma_spi1_tx
 #define SD_SPI_DMA_RX hdma_spi1_rx
-#define EXTRA_BYTES 3
+#define EXTRA_BYTES 4
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

@@ -33,6 +33,17 @@ class KalmanFilter {
         Vector<double,18> kB; // barometer Kalman gain
         double dB; // barometer innovation
 
+        Matrix<double,2,18> hG; // GPS measurement matrix
+        Matrix<double,18,2> kG; // GPS Kalman gain
+        Vector2d dG; // GPS innovation
+        Vector2d ll0; // reference lat/lon for GPS
+        Vector2d ll; // current lat/lon for GPS
+
+        Matrix<double,2,18> hV; // GPS velocity measurement matrix
+        Matrix<double,18,2> kV; // GPS velocity Kalman gain
+        Vector2d dV; // GPS velocity innovation
+        Vector2d vGPS; // GPS velocity measurement
+
         Vector3d wBias = Vector3d::Zero();
         Vector3d aBias = Vector3d::Zero();
 
@@ -54,7 +65,8 @@ class KalmanFilter {
         double sigGyro = DEG2RAD(0.002086); // rad/s / sqrt(hz)
         double sigMag = 0.000053; // Gauss / sqrt(hz)
         double sigBaro = 0.354508; // meters / sqrt(hz)
-        double sigGPS = 5.0; // meters rms
+        double sigGPS = 3.0; // meters rms
+        double sigGPSVel = 0.3; // m/s rms
         double sigBa = 0.000078;
         double sigBw = 0.00022;
         double sigBm = 0.00009;
@@ -63,5 +75,6 @@ class KalmanFilter {
         double RBaro = sigBaro*sigBaro;
         Matrix3d RMag = Matrix3d::Identity() * sigMag*sigMag;
         Matrix2d RGPS = Matrix2d::Identity() * sigGPS*sigGPS;
+        Matrix2d RGPSVel = Matrix2d::Identity() * sigGPSVel*sigGPSVel;
 
 };

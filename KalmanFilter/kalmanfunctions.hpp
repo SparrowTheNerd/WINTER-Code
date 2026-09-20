@@ -4,8 +4,7 @@
 #include "Eigen/Dense"
 using namespace Eigen;
 
-DiagonalMatrix<double,3> I3 = DiagonalMatrix<double,3>::Identity();
-
+extern Matrix3d I3;
 
 
 Matrix<double,18,18> StateTransition(Vector3d w, Vector3d a, Vector3d wP, Vector3d aP, Quaterniond q, Quaterniond qP) {
@@ -25,16 +24,27 @@ Matrix<double,18,18> StateTransition(Vector3d w, Vector3d a, Vector3d wP, Vector
 
 Vector<double,10> InertialIntegration(Vector<double,10> x, Vector3d wRaw, Vector3d wBias, Vector3d aRaw, Vector3d aBias, double dt) {
     double dt2 = dt/2.0;
+    Matrix4d I4 = Matrix4d::Identity();
     Vector3d w = wRaw - wBias;
     Vector3d a = aRaw - aBias;
-    Quaterniond q {x(0), x(1), x(2), x(3)};
+    Quaterniond q = Quaterniond::FromCoeffsScalarFirst (x(0), x(1), x(2), x(3));
 
-    Quaterniond q1 {
-        q.w() - dt2*w.x()*q.x() - dt2*w.y()*q.y() - dt2*w.z()*q.z(),
-        q.x() + dt2*w.x()*q.w() - dt2*w.y()*q.z() + dt2*w.z()*q.y(),
-        q.y() + dt2*w.x()*q.z() + dt2*w.y()*q.w() - dt2*w.z()*q.x(),
-        q.z() - dt2*w.x()*q.y() + dt2*w.y()*q.x() + dt2*w.z()*q.w()
-    };
+    // Quaterniond q1 {
+    //     q.w() - dt2*w.x()*q.x() - dt2*w.y()*q.y() - dt2*w.z()*q.z(),
+    //     q.x() + dt2*w.x()*q.w() - dt2*w.y()*q.z() + dt2*w.z()*q.y(),
+    //     q.y() + dt2*w.x()*q.z() + dt2*w.y()*q.w() - dt2*w.z()*q.x(),
+    //     q.z() - dt2*w.x()*q.y() + dt2*w.y()*q.x() + dt2*w.z()*q.w()
+    // };
+    // q1.normalize();
+
+    Matrix4d omega {    {0.0, -w.x(), -w.y(), -w.z()},
+                        {w.x(), 0.0, w.z(), -w.y()},
+                        {w.y(), -w.z(), 0.0, w.x()},
+                        {w.z(), w.y(), -w.x(), 0.0}
+                    };
+    double wN = w.norm();
+    Vector4d q1Vec = (cos(wN*dt2)*I4 + (1.0/wN)*sin(wN*dt2)*omega)*q.coeffsScalarFirst();
+    Quaterniond q1 = Quaterniond::FromCoeffsScalarFirst (q1Vec(0), q1Vec(1), q1Vec(2), q1Vec(3));
     q1.normalize();
     Vector3d aG = q1*a;
     aG.z() -= 9.80665; // remove gravity
@@ -55,11 +65,11 @@ Vector<double,10> InertialIntegration(Vector<double,10> x, Vector3d wRaw, Vector
 
 Matrix<double,18,18> noiseCovariance(double dT, double pnw, double pna, double Ba, double Bw, double Bm) {
     Matrix<double,18,18> Q = Matrix<double,18,18>::Zero();
-    Matrix3d Iw = Matrix3d::Identity() * (pnw * pnw);
-    Matrix3d Ia = Matrix3d::Identity() * (pna * pna);
-    Matrix3d IBw = Matrix3d::Identity() * (Bw * Bw);
-    Matrix3d IBa = Matrix3d::Identity() * (Ba * Ba);
-    Matrix3d IBm = Matrix3d::Identity() * (Bm * Bm);
+    Matrix3d Iw = I3 * (pnw * pnw);
+    Matrix3d Ia = I3 * (pna * pna);
+    Matrix3d IBw = I3 * (Bw * Bw);
+    Matrix3d IBa = I3 * (Ba * Ba);
+    Matrix3d IBm = I3 * (Bm * Bm);
 
     Q.block<3,3>(0,0) = Iw*dT + IBw*(dT*dT*dT/3.0);
     Q.block<3,3>(9,0) = -IBw*(dT*dT/2.0);

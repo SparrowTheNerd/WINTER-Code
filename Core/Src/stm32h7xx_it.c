@@ -61,6 +61,10 @@ extern DMA_HandleTypeDef hdma_spi1_rx;
 extern SPI_HandleTypeDef hspi1;
 /* USER CODE BEGIN EV */
 
+void EXTI4_IRQHandler(void) {
+  HAL_GPIO_EXTI_IRQHandler(SD_MISO_Pin);
+}
+
 /* USER CODE END EV */
 
 /******************************************************************************/

@@ -207,10 +207,22 @@ SECTIONS
   }
 
   /* RAM MODIFICATION */
-  .nocache(NOLOAD) :
+  .nocachetx (NOLOAD) :
   {
     . = ALIGN(32);
-    *(.nocache)
+    _snocachetx = .;
+    *(.nocachetx)
+    . = ALIGN(32);
+    _enocachetx = .;
+  } > RAM_D2
+
+  .nocacherx (NOLOAD) :
+  {
+    . = ALIGN(32);
+    _snocacherx = .;
+    *(.nocacherx)
+    . = ALIGN(32);
+    _enocacherx = .;
   } > RAM_D3
 
 }

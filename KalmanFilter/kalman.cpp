@@ -12,7 +12,7 @@ void KalmanFilter::init(MMC5983* mag, ICM42688* imu, MS5607* baro, ADXL375* high
     double gOfst[3] = {0,0,0};
     double accelInit[3] = {0,0,0};
 
-    for(int i=0; i<200; i++) {
+    for(int i=0; i<250; i++) {
         imu->ReadIMU();
         for(int j=0; j<3; j++) {
             gOfst[j] += imu->gyro_dps[j];
@@ -31,6 +31,8 @@ void KalmanFilter::init(MMC5983* mag, ICM42688* imu, MS5607* baro, ADXL375* high
     qP = Quaterniond::FromTwoVectors(MapIMU(accelInit), Vector3d {0,0,9.80665});
     intState << qP.w(), qP.x(), qP.y(), qP.z(), 0.0, 0.0, baro->alt, 0.0, 0.0, 0.0;
 
+    ll0 << (double)gnss->getLatitude()/10000000.0, (double)gnss->getLongitude()/10000000.0;
+
     errState.setZero();
 }
 void KalmanFilter::predict(double dt) {
@@ -42,7 +44,7 @@ void KalmanFilter::predict(double dt) {
 
     intStatePriori = InertialIntegration(intState, wRaw, wBias, aRaw, aBias, dt);
 
-    Quaterniond q {intStatePriori(0), intStatePriori(1), intStatePriori(2), intStatePriori(3)}; // can't use segment bc Eigen treats Vector4 as XYZW order, stupid
+    Quaterniond q  = Quaterniond::FromCoeffsScalarFirst (intStatePriori(0), intStatePriori(1), intStatePriori(2), intStatePriori(3));
     F = StateTransition(wRaw, aRaw, wP, aP, q, qP);
     Phi = I18 + F*dt + 0.5*F*F*dt*dt;
     Q = noiseCovariance(dt, sigGyro, sigAccel, sigBa, sigBw, sigBm);
@@ -67,8 +69,22 @@ void KalmanFilter::update() {
         kB = P*hB.transpose() / ((hB * P * hB.transpose()) + RBaro); 
         // print_matrix2(P);
         errState = errState + kB*dB;
-        P = (I18 - kB * hB) * P * (I18 - kB * hB).transpose() + kB * RBaro * kB.transpose();
+        P = (I18 - kB * hB) * P;
+
+        ll << (double)gnss->getLatitude()/10000000.0, (double)gnss->getLongitude()/10000000.0;
+        GPSMeas(intStatePriori.segment<2>(4), ll, ll0, &hG, &dG);
+        kG = P*hG.transpose() * (hG * P * hG.transpose() + RGPS).inverse();
+        errState = errState + kG*dG;
+        P = (I18 - kG * hG) * P;
+
+        vGPS << (double)gnss->getNedNorthVel()/1000.0, (double)gnss->getNedEastVel()/1000.0;
+        GPSVelMeas(intStatePriori.segment<2>(7), vGPS, &hV, &dV);
+        kV = P*hV.transpose() * (hV * P * hV.transpose() + RGPSVel).inverse();
+        errState = errState + kV*dV;
+        P = (I18 - kV * hV) * P;
     }
+    
+
     // ... other sensor updates
     intState.segment<4>(0) = (Quaterniond(intStatePriori(0), intStatePriori.segment<3>(1)).normalized() * Quaterniond {1, errState.segment<3>(0)/2.0}.normalized()).normalized().coeffsScalarFirst(); // apply angle error as a quaternion rotation
     intState.segment<3>(4) = intStatePriori.segment<3>(4) + errState.segment<3>(6); // apply velocity error

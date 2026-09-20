@@ -6,12 +6,13 @@
   ******************************************************************************
   * @attention
   *
-  * Copyright (c) 2025 STMicroelectronics.
-  * All rights reserved.
+  * <h2><center>&copy; Copyright (c) 2020 STMicroelectronics.
+  * All rights reserved.</center></h2>
   *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
+  * This software component is licensed by ST under Ultimate Liberty license
+  * SLA0044, the "License"; You may not use this file except in compliance with
+  * the License. You may obtain a copy of the License at:
+  *                             www.st.com/SLA0044
   *
   ******************************************************************************
   */
@@ -43,18 +44,7 @@
 /* Private variables ---------------------------------------------------------*/
 /* Disk status */
 static volatile DSTATUS Stat = STA_NOINIT;
-DRESULT USER_DMA_Write (
-  const BYTE *buff,	/* Pointer to the data to write */
-  BYTE *rxBuff,	/* Pointer to the data to receive (can be NULL) */
-  uint16_t size,		/* Size of data to write (must be 512) */
-  DWORD sector,		/* Start sector number (LBA) */
-  UINT count			/* Number of sectors to write (1..128) */
-)
-{
-  /* USER CODE BEGIN DMA_WRITE */
-    return USER_SPI_DMA_write(buff, rxBuff, size, sector, count);
-  /* USER CODE END DMA_WRITE */
-}
+
 /* USER CODE END DECL */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -93,7 +83,7 @@ DSTATUS USER_initialize (
 )
 {
   /* USER CODE BEGIN INIT */
-    return USER_SPI_initialize(pdrv);
+	return USER_SPI_initialize(pdrv);
   /* USER CODE END INIT */
 }
 
@@ -107,7 +97,7 @@ DSTATUS USER_status (
 )
 {
   /* USER CODE BEGIN STATUS */
-    return USER_SPI_status(pdrv);
+	return USER_SPI_status(pdrv);
   /* USER CODE END STATUS */
 }
 
@@ -127,7 +117,7 @@ DRESULT USER_read (
 )
 {
   /* USER CODE BEGIN READ */
-    return USER_SPI_read(pdrv, buff, sector, count);
+	return USER_SPI_read(pdrv, buff, sector, count);
   /* USER CODE END READ */
 }
 
@@ -149,7 +139,7 @@ DRESULT USER_write (
 {
   /* USER CODE BEGIN WRITE */
   /* USER CODE HERE */
-    return USER_SPI_write(pdrv, buff, sector, count);
+	return USER_SPI_write(pdrv, buff, sector, count);
   /* USER CODE END WRITE */
 }
 #endif /* _USE_WRITE == 1 */
@@ -169,8 +159,9 @@ DRESULT USER_ioctl (
 )
 {
   /* USER CODE BEGIN IOCTL */
-    return USER_SPI_ioctl(pdrv, cmd, buff);
+	return USER_SPI_ioctl(pdrv, cmd, buff);
   /* USER CODE END IOCTL */
 }
 #endif /* _USE_IOCTL == 1 */
 
+/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
