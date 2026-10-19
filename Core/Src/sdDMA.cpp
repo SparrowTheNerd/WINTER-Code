@@ -11,7 +11,7 @@ constexpr size_t FILE_SIZE = 64 * 1024 * 1024; // 64 MB
 constexpr size_t BLOCK_SIZE = 512;
 constexpr size_t numPerBlock = BLOCK_SIZE / sizeof(dataPacket);
 constexpr size_t BLOCK_FRAME_SIZE = BLOCK_SIZE + EXTRA_BYTES; // 512 bytes + 2 bytes for CRC
-constexpr uint32_t dmaBlocks = 31;
+constexpr uint32_t dmaBlocks = 2;
 constexpr size_t BUFFER_SIZE = BLOCK_FRAME_SIZE * dmaBlocks; // blocks plus CRC
 constexpr size_t NUM_BLOCKS = FILE_SIZE / BLOCK_SIZE;
 
@@ -19,11 +19,14 @@ static uint8_t bufA[16384] __attribute__((section(".nocachetx"))); // Buffer A f
 static uint8_t bufB[16384] __attribute__((section(".nocachetx"))); // Buffer B for write operations
 static uint8_t rxBuffer[1024] __attribute__((section(".nocacherx"))); // Buffer for read operations
 
+static uint8_t dataPacketBuffer[sizeof(dataPacket)]; // Buffer for a single data packet
+
 static uint8_t* logBuf = bufA;
 static uint8_t* writeBuf = NULL;
 static uint8_t* pendingBuf = NULL;
 
 volatile static uint8_t sd_clear = 1; // Flag to indicate that the SD card is ready for the next transfer
+volatile static uint8_t sd_ready_irq = 0; // MISO rising edge observed while waiting for card ready
 
 DWORD lba_start;
 
@@ -54,7 +57,7 @@ void sdInit() {
         }
     }
 
-    f_expand(&file, FILE_SIZE,1); // Expand file to desired size
+    // f_expand(&file, FILE_SIZE,1); // Expand file to desired size
     f_lseek(&file, f_size(&file));
     // DWORD lba_start = 0;
     lba_start = ((file.obj.sclust - 2) * SDFatFS.csize) + SDFatFS.database;   //calculate the starting LBA
@@ -65,7 +68,8 @@ void sdInit() {
 void logMachine() {  // SD card state machine for async writing
     static uint32_t idx = 0;
     static DWORD sector = lba_start + idx*dmaBlocks;
-    const uint8_t cmd25[5] = {0x40 | 25, (uint8_t)(sector >> 24), (uint8_t)(sector >> 16), (uint8_t)(sector >> 8), (uint8_t)sector};
+    static uint8_t rxByte[1] = {0};
+    const uint8_t cmd25[6] = {0x40 | 25, (uint8_t)(sector >> 24), (uint8_t)(sector >> 16), (uint8_t)(sector >> 8), (uint8_t)sector, 0x01};
     logData();
     
     switch (SD_State) {
@@ -76,12 +80,45 @@ void logMachine() {  // SD card state machine for async writing
             break;
         case SD_OPEN:
             f_open(&file, FILE_NAME, FA_WRITE | FA_OPEN_EXISTING);
-            HAL_SPI_Transmit(&SD_SPI_HANDLE, cmd25, 5, HAL_MAX_DELAY);
-            HAL_SPI_TransmitReceive_DMA(&SD_SPI_HANDLE, writeBuf, NULL, BLOCK_FRAME_SIZE);
+            HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_RESET);
+            if (HAL_SPI_Transmit(&SD_SPI_HANDLE, cmd25, sizeof(cmd25), HAL_MAX_DELAY) != HAL_OK) {
+                SerialPrintln((uint8_t*)"CMD25 transmit failed.");
+                SD_State = SD_CLOSE;
+                break;
+            }
+
+            // The card returns R1 after CMD25.  Clock up to ten dummy bytes
+            // until its response arrives; only 0x00 accepts the write command.
+            rxByte[0] = 0xFF;
+            for (uint8_t retries = 0; retries < 10; ++retries) {
+                const uint8_t dummy = 0xFF;
+                if (HAL_SPI_TransmitReceive(&SD_SPI_HANDLE, &dummy, rxByte, 1, 50) != HAL_OK) {
+                    break;
+                }
+                if ((rxByte[0] & 0x80U) == 0U) {
+                    break;
+                }
+            }
+            if (rxByte[0] != 0x00U) {
+                SerialPrintln((uint8_t*)"CMD25 rejected by SD card.");
+                SD_State = SD_CLOSE;
+                break;
+            }
+
+            if (HAL_SPI_Transmit_DMA(&SD_SPI_HANDLE, writeBuf, BLOCK_FRAME_SIZE) != HAL_OK) {
+                SerialPrintln((uint8_t*)"SD write DMA start failed.");
+                SD_State = SD_CLOSE;
+                break;
+            }
             sd_clear = 0;
             SD_State = SD_STREAMING;
+            SerialPrintln((uint8_t*)"SD Open");
             break;
         case SD_STREAMING:
+            if (sd_ready_irq) {
+                sd_ready_irq = 0;
+                SD_Ready_Callback();
+            }
             if(sd_clear) {
                 SD_State = SD_CLOSE;
                 idx++;
@@ -89,7 +126,9 @@ void logMachine() {  // SD card state machine for async writing
             }
             break;
         case SD_CLOSE:
+            SerialPrintln((uint8_t*)"SD Close");
             f_close(&file);
+            HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_SET);
             writeBuf = NULL;
             if(pendingBuf != NULL) {
                 writeBuf = pendingBuf;
@@ -100,8 +139,15 @@ void logMachine() {  // SD card state machine for async writing
     }
 }
 
+void writeData() {
+    f_open(&file, FILE_NAME, FA_WRITE | FA_OPEN_EXISTING);
+    f_lseek(&file, f_size(&file));
+    memcpy(dataPacketBuffer, &dataPacket, sizeof(dataPacket));
+    f_write(&file, dataPacketBuffer, sizeof(dataPacketBuffer), NULL);
+    f_close(&file);
+}
 
-void logData() {
+/* void logData() {
     static uint32_t idx = 0;
     static uint8_t ofst = 0;
 
@@ -137,6 +183,41 @@ void logData() {
         logBuf = (logBuf == bufA) ? bufB : bufA; // swap logging buffer if current buffer is full
         idx = 0;
     }
+} */
+
+void logData() {
+    static size_t packetIndex = 0;
+    constexpr size_t totalPackets = numPerBlock * dmaBlocks;
+
+    const size_t block = packetIndex / numPerBlock;
+    const size_t packetInBlock = packetIndex % numPerBlock;
+
+    uint8_t *frame = logBuf + block * BLOCK_FRAME_SIZE;
+
+    if (packetInBlock == 0) {
+        frame[0] = 0xFC; // CMD25 multi-block data token
+    }
+
+    memcpy(frame + 1 + packetInBlock * sizeof(dataPacket),
+           &dataPacket, sizeof(dataPacket));
+
+    if (packetInBlock == numPerBlock - 1) {
+        frame[1 + BLOCK_SIZE] = 0xFF; // CRC byte 1
+        frame[1 + BLOCK_SIZE + 1] = 0xFF; // CRC byte 2
+    }
+
+    ++packetIndex;
+
+    if (packetIndex == totalPackets) {
+        if (writeBuf == NULL) {
+            writeBuf = logBuf;
+        } else {
+            pendingBuf = logBuf;
+        }
+
+        logBuf = (logBuf == bufA) ? bufB : bufA;
+        packetIndex = 0;
+    }
 }
 
 extern DMA_HandleTypeDef hdma_spi1_tx;
@@ -146,10 +227,17 @@ void SD_Busy_Wait() {
 
 	((DMA_Stream_TypeDef *)hdma_spi1_tx.Instance)->CR &= ~DMA_SxCR_MINC; // Disable memory increment mode
 
-	__HAL_GPIO_EXTI_CLEAR_IT(SD_MISO_Pin);
-	HAL_NVIC_EnableIRQ(EXTI4_IRQn);	// Turn MISO into an interrupt - when SD card is ready it will pull MISO high
+	sd_ready_irq = 0;
+	// 2. HARDWARE TRICK: Safely switch PB4 to "Input" Mode so the EXTI block can track it
+    // Clear the MODER bits for Pin 4 (bits 8-9) and leave them at 00 (Input Mode)
+    GPIOB->MODER &= ~(3U << (4 * 2)); 
 
-    SD_SPI_HANDLE.Instance->CFG1 = (SD_SPI_HANDLE.Instance->CFG1 & ~SPI_CFG1_MBR) | SPI_BAUDRATEPRESCALER_256; // Slow down SPI clock
+    // 3. Clear any lingering hardware flags
+    EXTI_D1->PR1 = (1U << 4);
+    
+    // 4. Turn on the "Just-In-Time" listening switch
+    HAL_NVIC_EnableIRQ(EXTI4_IRQn);
+    // SD_SPI_HANDLE.Instance->CFG1 = (SD_SPI_HANDLE.Instance->CFG1 & ~SPI_CFG1_MBR) | SPI_BAUDRATEPRESCALER_256; // Slow down SPI clock
 
 	HAL_SPI_Transmit_DMA(&SD_SPI_HANDLE, (uint8_t*)&busyByte, 65535); // Start a DMA transfer to read the busy state of the SD card
 
@@ -157,17 +245,24 @@ void SD_Busy_Wait() {
 
 extern SPI_HandleTypeDef SD_SPI_HANDLE;
 
+void SD_Ready_Notify() {
+    sd_ready_irq = 1;
+}
+
 void SD_Ready_Callback() {
     const uint8_t end = 0xFD; // Stop token for multiple block write
 	static uint8_t idx = 1;
 
 	HAL_NVIC_DisableIRQ(EXTI4_IRQn);
 	HAL_SPI_Abort(&SD_SPI_HANDLE); // Stop the DMA transfer
+    // SD_Busy_Wait temporarily makes PB4 a GPIO input for EXTI.  Restore
+    // alternate-function mode before the next SPI transaction.
+    GPIOB->MODER = (GPIOB->MODER & ~(3U << (4U * 2U))) | (2U << (4U * 2U));
     SD_SPI_HANDLE.Instance->CFG1 = (SD_SPI_HANDLE.Instance->CFG1 & ~SPI_CFG1_MBR) | SPI_BAUDRATEPRESCALER_32;
 	((DMA_Stream_TypeDef *)hdma_spi1_tx.Instance)->CR |= DMA_SxCR_MINC; // Re-enable memory increment mode
 
 	if(idx < dmaBlocks) {
-		HAL_SPI_TransmitReceive_DMA(&SD_SPI_HANDLE, writeBuf + idx*(512+EXTRA_BYTES), NULL, (512+EXTRA_BYTES));
+		HAL_SPI_Transmit_DMA(&SD_SPI_HANDLE, writeBuf + idx*(512+EXTRA_BYTES), (512+EXTRA_BYTES));
 		idx++;
 	}
 	else {

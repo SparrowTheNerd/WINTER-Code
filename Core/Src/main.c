@@ -134,6 +134,7 @@ int main(void)
   // 3. Configure EXTI Line 4 to trigger on a RISING edge
   EXTI->RTSR1 |= EXTI_RTSR1_TR4;   // Enable rising edge trigger
   EXTI->FTSR1 &= ~EXTI_FTSR1_TR4;  // Disable falling edge trigger
+  EXTI_D1->IMR1 |= EXTI_IMR1_IM4;  // Unmask EXTI4 in the Cortex-M7 domain
 
   // 4. Enable EXTI4 at the Core Level
   HAL_NVIC_SetPriority(EXTI4_IRQn, 5, 0); 

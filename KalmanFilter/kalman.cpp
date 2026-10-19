@@ -77,7 +77,7 @@ void KalmanFilter::update() {
         errState = errState + kG*dG;
         P = (I18 - kG * hG) * P;
 
-        vGPS << (double)gnss->getNedNorthVel()/1000.0, (double)gnss->getNedEastVel()/1000.0;
+        vGPS << (double)gnss->getNedEastVel()/1000.0, (double)gnss->getNedNorthVel()/1000.0;
         GPSVelMeas(intStatePriori.segment<2>(7), vGPS, &hV, &dV);
         kV = P*hV.transpose() * (hV * P * hV.transpose() + RGPSVel).inverse();
         errState = errState + kV*dV;

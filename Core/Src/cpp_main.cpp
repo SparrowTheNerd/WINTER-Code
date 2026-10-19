@@ -28,7 +28,7 @@
 #include <Eigen/Dense>
 using namespace Eigen;
 
-#define CYCLE_TIME 5000 // 5.000 ms of cycles
+#define CYCLE_TIME 15000 // 15.000 ms of cycles
 
 
 
@@ -87,8 +87,6 @@ int cpp_main()
     }
     HAL_Delay(2000);
 
-    sdInit();
-
     // Enable DWT Cycle Counter
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->LAR = 0xC5ACCE55; 
@@ -101,19 +99,26 @@ int cpp_main()
     float t = 0;
     uint32_t cycles = (HAL_RCC_GetHCLKFreq() / 1000000) * CYCLE_TIME; // 5.000 ms of cycles
     
+    uint8_t startupSIV = myGNSS.getSIV();
+    while(startupSIV < 4 || startupSIV == 28 || startupSIV == 92) {
+        sprintf((char*)usbTxBuf, "Waiting for fix... Sats: %d", startupSIV);
+        SerialPrintln(usbTxBuf);
+        startupSIV = myGNSS.getSIV();
+        HAL_Delay(1000);
+    }
+    sprintf((char*)usbTxBuf, "GNSS Fix Acquired: %d Sats", myGNSS.getSIV());
+    SerialPrintln(usbTxBuf);
 
-    // while(myGNSS.getSIV() < 4) {
-    //     SerialPrintln((uint8_t*)"Waiting for fix...");
-    //     HAL_Delay(1000);
-    // }
+
+    sdInit();
 
     ekf.init(&mag, &imu, &baro, &highG, &myGNSS);
     prevTime = (double)(HAL_GetTick())/1000.0;
     uint8_t printCounter = 0;
 
+    SerialPrintln((uint8_t*)"Starting main loop...");
 
-	for(uint8_t i=0; i<100; i++)
-	{   
+    while(1) {
 
         if(DWT->CYCCNT - start >= cycles) {
             dt = (double)(DWT->CYCCNT - curr) / (double)HAL_RCC_GetHCLKFreq(); // Calculate elapsed time in s
@@ -121,33 +126,44 @@ int cpp_main()
             t += dt;
             lipoVoltage = (float)analogReadSE(ADC_CHANNEL_10)*voltsPerBit*2.f; 
 
-            // ekf.predict(dt);
-            // ekf.update();
+            ekf.predict(dt);
+            ekf.update();
 
             // printCounter++;
             imu.ReadIMU();
             mag.ReadMag();
+            highG.ReadAccel();
             baro.GetData();
             if (baro.available) {
                 baro.Convert();
             }
-           
+            
             // dataPacket.startByte = 0xFC;
-            dataPacket.time = 0.0f;
+            dataPacket.time = (float)t;
             dataPacket.time_unix = 0.0f;
-            memcpy(dataPacket.accel, (float*)imu.accel_ms2, 12);
-            memcpy(dataPacket.gyro, (float*)imu.gyro_dps, 12);
-            memcpy(dataPacket.mag, (float*)mag.mag_gauss.data(), 12);
+            for(int j = 0; j < 3; j++) {
+                dataPacket.accel[j] = (float)imu.accel_ms2[j];
+                dataPacket.gyro[j] = (float)imu.gyro_dps[j];
+                dataPacket.mag[j] = (float)mag.mag_gauss[j];
+                dataPacket.highG[j] = (float)highG.accel_ms2[j];
+            }
             dataPacket.lat = myGNSS.getLatitude();
             dataPacket.lon = myGNSS.getLongitude();
             dataPacket.gpsAlt = myGNSS.getAltitude();
+            dataPacket.gpsNVel = myGNSS.getNedNorthVel();
+            dataPacket.gpsEVel = myGNSS.getNedEastVel();
+            dataPacket.gpsHeading = myGNSS.getHeading();
             dataPacket.numsats = myGNSS.getSIV();
             dataPacket.baroAlt = (float)baro.alt;
             dataPacket.baroTemp = (float)baro.temp;
             dataPacket.voltage = (uint8_t)(lipoVoltage*10); // Convert voltage to decivolts for storage
             // dataPacket.crcpad = 0xFFFF; 
-
-            logMachine();
+            memcpy(dataPacket.ekfState, (ekf.intState.cast<float>().eval()).data(), 40);
+            memcpy(dataPacket.errState, (ekf.errState.cast<float>().eval()).data(), 72);
+            memcpy(dataPacket.pDiag, (ekf.P.diagonal().cast<float>().eval()).data(), 36);
+            // logMachine();
+            writeData();
+            // printCounter++;
             
             // if(printCounter > 20) {
             //     print_matrix(ekf.intState.transpose());
@@ -156,24 +172,17 @@ int cpp_main()
             //     // sprintf((char*)usbTxBuf,"Pressure: %d Pa",baro.pres);
             //     // SerialPrintln(usbTxBuf);
 
-            //     // HAL_Delay(1);
-            //     // sprintf((char*)usbTxBuf, "%.5f \t %.5f \t %.5f    ",imu.accel_ms2[0], imu.accel_ms2[1], imu.accel_ms2[2]);
-            //     // bufLen = sprintf((char*)usbTxBuf, ">3D|Orientation:S:cube:P:0:0:0:Q:%.5f:%.5f:%.5f:%.5f:W:1:H:1:D:1:C:#ff0000\r\n", -ekf.intState(1), ekf.intState(3), ekf.intState(2), ekf.intState(0));
-            //     // bufLen += sprintf((char*)usbTxBuf+bufLen, ">aX: %.5f\r\n>aY: %.5f\r\n>aZ: %.5f\r\n", imu.accel_ms2[0], imu.accel_ms2[1], imu.accel_ms2[2]);
-            //     // bufLen += sprintf((char*)usbTxBuf+bufLen, ">gX: %.5f\r\n>gY: %.5f\r\n>gZ: %.5f", imu.gyro_dps[0], imu.gyro_dps[1], imu.gyro_dps[2]);
-            //     // SerialPrintln(usbTxBuf);
-            //     printCounter = 0;
+                // HAL_Delay(1);
+                // sprintf((char*)usbTxBuf, "%.5f \t %.5f \t %.5f    ",imu.accel_ms2[0], imu.accel_ms2[1], imu.accel_ms2[2]);
+                // bufLen = sprintf((char*)usbTxBuf, ">3D|Orientation:S:cube:P:0:0:0:Q:%.5f:%.5f:%.5f:%.5f:W:1:H:1:D:1:C:#ff0000\r\n", -ekf.intState(1), ekf.intState(3), ekf.intState(2), ekf.intState(0));
+                // bufLen += sprintf((char*)usbTxBuf+bufLen, ">aX: %.5f\r\n>aY: %.5f\r\n>aZ: %.5f\r\n", imu.accel_ms2[0], imu.accel_ms2[1], imu.accel_ms2[2]);
+                // bufLen += sprintf((char*)usbTxBuf+bufLen, ">gX: %.5f\r\n>gY: %.5f\r\n>gZ: %.5f", imu.gyro_dps[0], imu.gyro_dps[1], imu.gyro_dps[2]);
+                // SerialPrintln(usbTxBuf);
+                // printCounter = 0;
             // } 
         }
-        else {
-            i--;
-            HAL_Delay(5);
-        }
+    }
 
-		// HAL_Delay(5); */
-	}
-    SerialPrintln((uint8_t*)"Done!");
-    return 1;
 }
 
 void print_matrix(Eigen::MatrixXd X)  

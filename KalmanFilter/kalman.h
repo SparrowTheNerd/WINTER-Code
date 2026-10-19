@@ -20,10 +20,11 @@ class KalmanFilter {
 
         Vector<double,10> intState; // inertial state vector (quaternion, position, velocity)
         Vector<double,18> errState;  // error state vector (angle error, velocity error, position error, gyro bias, accel bias, mag bias)
+        Matrix<double,18,18> P;      // error covariance matrix
 
     private:
         Vector<double,10> intStatePriori; // prior inertial state vector
-        Matrix<double,18,18> P;      // error covariance matrix
+        
         Matrix<double,18,18> Pn1n; // prior error covariance matrix
         Matrix<double,18,18> F;      // state transition matrix
         Matrix<double,18,18> Phi;    // state transition matrix second-order integration

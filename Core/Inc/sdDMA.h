@@ -19,16 +19,20 @@ struct packet {
     float highG[3]; // high-G accelerometer
     float gyro[3]; // gyroscope
     float mag[3]; // magnetometer
-    float lat; // GPS latitude
-    float lon; // GPS longitude
-    float gpsAlt; // GPS altitude
+    int32_t lat; // GPS latitude
+    int32_t lon; // GPS longitude
+    int32_t gpsAlt; // GPS altitude
+    int32_t gpsNVel; // GPS north velocity
+    int32_t gpsEVel; // GPS east velocity
+    int32_t gpsHeading; // GPS heading
+
     uint8_t numsats; // number of satellites used in fix
     float baroAlt; // barometer altitude
     float baroTemp; // barometer temperature
     uint8_t voltage; // battery voltage in decivolts
     uint8_t pyros[6]; // pyro channels
     uint8_t servos[4]; // servo PWM values
-    uint8_t pad[19] = {0xFF}; // padding to make 256 bytes
+    uint8_t pad[7] = {0xFF}; // padding to make 256 bytes
 } __attribute__((packed));
 
 extern packet dataPacket;
@@ -45,3 +49,5 @@ void logMachine();
 void logData();
 void SD_Busy_Wait();
 void SD_Ready_Callback();
+void SD_Ready_Notify();
+void writeData();
